@@ -1,36 +1,3 @@
-
-/*
- * ============================================================
- *  TANGO TREE — C++ Implementation
- * ============================================================
- *  Reference:
- *    Demaine, Harmon, Iacono, Patrascu
- *    "Dynamic Optimality—Almost"
- *    SIAM Journal on Computing 37(1):240-265, 2007
- *    http://erikdemaine.org/papers/Tango_SICOMP/paper.pdf
- *
- *  ARCHITECTURE:
- *  1. Reference tree  – conceptual complete BST. Never stored.
- *     Provides depth, parent, left, right for every key.
- *  2. Preferred child – child most recently accessed.
- *     Chains of preferred edges form "preferred paths".
- *  3. Each preferred path is stored in an auxiliary Red-Black Tree (RBT)
- *     sorted by depth-in-reference-tree, augmented with min/max depth.
- *  4. Each node on a path carries an aux_child pointer to the RBT of
- *     the preferred path rooted at its non-preferred child.
- *  5. access(x):
- *       Walk the reference tree path root->x.
- *       At each node on that path, check which aux tree it belongs to.
- *       When we cross into a new preferred path, do a cut/join.
- *       Each cut/join = O(log log n).
- *  COMPETITIVE RATIO: O(log log n) * OPT  [Theorem 1, Section 4]
- *
- *  IMPLEMENTATION NOTE:
- *    The RBT is sorted by depth, so key-search is O(n) linear scan.
- *    We track which aux tree each key lives in via a hash map (key_to_aux).
- * ============================================================
- */
-
 #include<bits/stdc++.h>
 using namespace std;
 // ============================================================
