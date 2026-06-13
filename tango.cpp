@@ -1,8 +1,6 @@
 #include<bits/stdc++.h>
 using namespace std;
-// ============================================================
-//  NIL sentinel
-// ============================================================
+
 enum class Color { RED, BLACK };
 struct RBTree;
 
@@ -41,9 +39,9 @@ static void aug(RBNode* n) {
                               n->max_depth = max(n->max_depth, n->right->max_depth); }
 }
 
-// ============================================================
+
 //  Red-Black Tree  (sorted by DEPTH)
-// ============================================================
+
 struct RBTree {
     RBNode* root;
     RBTree() : root(G_NIL) {}
@@ -113,7 +111,7 @@ struct RBTree {
         if (n == G_NIL) return; reaug(n->left); reaug(n->right); aug(n);
     }
 
-    // Linear scan by key (tree is sorted by depth, not key)
+    // Linear scan by key (tree is sorted by depth)
     RBNode* find_key(int key) const {
         return find_key_rec(root, key);
     }
@@ -172,9 +170,9 @@ struct RBTree {
     ~RBTree() { destroy(root); }
 };
 
-// ============================================================
+
 //  Reference Tree
-// ============================================================
+
 struct RefTree {
     unordered_map<int,int> dep, par, lch, rch;
     int rk = -1;
@@ -195,9 +193,9 @@ struct RefTree {
     }
 };
 
-// ============================================================
+
 //  Tango Tree
-// ============================================================
+
 class TangoTree {
 public:
     explicit TangoTree(const vector<int>& keys)
@@ -252,7 +250,7 @@ private:
     unordered_map<int,RBTree*> key_aux;  // which aux tree holds each key
     long long acnt, tcost;
 
-    // ── Build ────────────────────────────────────────────────────
+    // ── Build ───
     RBTree* build_aux(int k) {
         if (k < 0) return nullptr;
         RBTree* t = new RBTree();
@@ -406,9 +404,9 @@ private:
     }
 };
 
-// ============================================================
+
 //  Tests & Demo
-// ============================================================
+
 static void sep(const string& s) {
       cout << "\n" <<string(62,'=') << "\n  " << s
               << "\n" << string(62,'=') << "\n";
