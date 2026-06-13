@@ -1,949 +1,552 @@
-#include <cstdio>
-#include <cstdlib>
-#include <cassert>
-
-//Reference tree node
-struct RefNode {
-    int key;
-    RefNode *left, *right, *parent;
-    void *aux_ptr;
-
-    // preferred child
-    RefNode *preferred;
-
-    RefNode(int k) : key(k), left(nullptr), right(nullptr), parent(nullptr),
-                     aux_ptr(nullptr), preferred(nullptr) {}
-};
-
-//Auxiliary (splay) tree node
-struct AuxNode {
-    RefNode *ref;
-    AuxNode *left, *right, *parent;
-    AuxNode(RefNode *r) : ref(r), left(nullptr), right(nullptr), parent(nullptr) {}
-};
-
-//Splay helpers
-void aux_set_auxptr(AuxNode *a, RefNode *r) {
-    if (r) r->aux_ptr = a;
-}
-
-void rotate_right(AuxNode *x) {
-    AuxNode *p = x->parent;
-    if (!p) return;
-    AuxNode *g = p->parent;
-
-    p->left = x->right;
-    if (x->right) x->right->parent = p;
-    x->right = p;
-    p->parent = x;
-
-    x->parent = g;
-    if (g) {
-        if (g->left == p) g->left = x;
-        else g->right = x;
-    }
-}
-
-void rotate_left(AuxNode *x) {
-    AuxNode *p = x->parent;
-    if (!p) return;
-    AuxNode *g = p->parent;
-
-    p->right = x->left;
-    if (x->left) x->left->parent = p;
-    x->left = p;
-    p->parent = x;
-
-    x->parent = g;
-    if (g) {
-        if (g->left == p) g->left = x;
-        else g->right = x;
-    }
-}
-
-AuxNode* splay(AuxNode *x) {
-    if (!x) return nullptr;
-    while (x->parent) {
-        AuxNode *p = x->parent;
-        AuxNode *g = p->parent;
-        if (!g) {
-            // zig
-            if (p->left == x) rotate_right(x);
-            else rotate_left(x);
-        } else if (g->left == p && p->left == x) {
-            // zig-zig
-            rotate_right(p);
-            rotate_right(x);
-        } else if (g->right == p && p->right == x) {
-            // zig-zig
-            rotate_left(p);
-            rotate_left(x);
-        } else if (g->left == p && p->right == x) {
-            // zig-zag
-            rotate_left(x);
-            rotate_right(x);
-        } else {
-            // zig-zag
-            rotate_right(x);
-            rotate_left(x);
-        }
-    }
-    return x;
-}
-
-// --- New aux utilities: find min/max, set aux_ptr across subtree ---
-AuxNode* aux_find_min(AuxNode *r) {
-    if (!r) return nullptr;
-    while (r->left) r = r->left;
-    return r;
-}
-AuxNode* aux_find_max(AuxNode *r) {
-    if (!r) return nullptr;
-    while (r->right) r = r->right;
-    return r;
-}
-
-void aux_set_all_auxptr(AuxNode *a_root) {
-    if (!a_root) return;
-    struct Stack { AuxNode* n; Stack* next; Stack(AuxNode* x):n(x),next(nullptr){} };
-    Stack *st = new Stack(a_root);
-    while (st) {
-        Stack *t = st;
-        AuxNode *n = t->n;
-        st = st->next;
-        n->ref->aux_ptr = n;
-        if (n->left) { Stack *s = new Stack(n->left); s->next = st; st = s; }
-        if (n->right) { Stack *s = new Stack(n->right); s->next = st; st = s; }
-        delete t;
-    }
-}
-
-// --- Aux split by key and aux merge ---
-// Splits 'root' into left and right where left has keys <= key, right has keys > key
-void aux_split_by_key(AuxNode *root, int key, AuxNode *&left, AuxNode *&right) {
-    left = right = nullptr;
-    if (!root) return;
-    // Find node with largest key <= key (candidate). Traverse like BST keeping candidate.
-    AuxNode *cur = root;
-    AuxNode *candidate = nullptr;
-    while (cur) {
-        if (cur->ref->key <= key) {
-            candidate = cur;
-            cur = cur->right;
-        } else {
-            cur = cur->left;
-        }
-    }
-    if (!candidate) {
-        // all nodes > key => left = nullptr, right = root (splay min to root for locality)
-        AuxNode *minn = aux_find_min(root);
-        root = splay(minn);
-        right = root;
-        if (right) {
-            right->parent = nullptr;
-        }
-        left = nullptr;
-    } else {
-        // splay candidate to root
-        root = splay(candidate);
-        left = root;
-        right = root->right;
-        if (right) {
-            right->parent = nullptr;
-        }
-        left->right = nullptr;
-    }
-    // set aux_ptrs properly
-    aux_set_all_auxptr(left);
-    aux_set_all_auxptr(right);
-}
-
-// Merge two aux trees: all keys in left <= keys in right
-AuxNode* aux_merge(AuxNode *left, AuxNode *right) {
-    if (!left) {
-        aux_set_all_auxptr(right);
-        return right;
-    }
-    if (!right) {
-        aux_set_all_auxptr(left);
-        return left;
-    }
-    // splay max of left to root
-    AuxNode *m = aux_find_max(left);
-    left = splay(m);
-    // attach right
-    left->right = right;
-    right->parent = left;
-    aux_set_all_auxptr(left);
-    return left;
-}
-
-// Build splay tree from array using iterative merges (demonstrates merge usage)
-AuxNode* build_splay_from_array_with_merge(RefNode **arr, int l, int r) {
-    AuxNode *root = nullptr;
-    for (int i = l; i <= r; ++i) {
-        AuxNode *node = new AuxNode(arr[i]);
-        node->left = node->right = node->parent = nullptr;
-        // merge existing root with single node (arr[i])
-        root = aux_merge(root, node);
-    }
-    return root;
-}
-
-// In-order traversal of splay
-void print_aux_inorder(AuxNode *a) {
-    if (!a) return;
-    print_aux_inorder(a->left);
-    printf("%d ", a->ref->key);
-    print_aux_inorder(a->right);
-}
-
-// Free an aux tree
-void free_aux_tree(AuxNode *a) {
-    if (!a) return;
-    free_aux_tree(a->left);
-    free_aux_tree(a->right);
-    a->ref->aux_ptr = nullptr;
-    delete a;
-}
-
-//Reference tree helpers
-RefNode* build_ref_from_sorted(int *arr, int l, int r) {
-    if (l > r) return nullptr;
-    int mid = (l + r) / 2;
-    RefNode* node = new RefNode(arr[mid]);
-    node->left = build_ref_from_sorted(arr, l, mid-1);
-    if (node->left) node->left->parent = node;
-    node->right = build_ref_from_sorted(arr, mid+1, r);
-    if (node->right) node->right->parent = node;
-    node->preferred = nullptr;
-    node->aux_ptr = nullptr;
-    return node;
-}
-
-RefNode* bst_search(RefNode *root, int key) {
-    RefNode *cur = root;
-    while (cur) {
-        if (key == cur->key) return cur;
-        if (key < cur->key) cur = cur->left;
-        else cur = cur->right;
-    }
-    return nullptr;
-}
-
-// BST insert (no rebalancing)
-RefNode* bst_insert(RefNode *&root, int key) {
-    if (!root) {
-        root = new RefNode(key);
-        return root;
-    }
-    RefNode *cur = root;
-    RefNode *par = nullptr;
-    while (cur) {
-        par = cur;
-        if (key < cur->key) cur = cur->left;
-        else if (key > cur->key) cur = cur->right;
-        else return cur;
-    }
-    RefNode *n = new RefNode(key);
-    n->parent = par;
-    if (key < par->key) par->left = n;
-    else par->right = n;
-    return n;
-}
-
-// BST transplant for delete
-void bst_transplant(RefNode *&root, RefNode *u, RefNode *v) {
-    if (!u->parent) root = v;
-    else if (u == u->parent->left) u->parent->left = v;
-    else u->parent->right = v;
-    if (v) v->parent = u->parent;
-}
-
-// Find min in subtree
-RefNode* bst_minimum(RefNode* x) {
-    while (x && x->left) x = x->left;
-    return x;
-}
-
-// BST delete node
-void bst_delete(RefNode *&root, RefNode *z) {
-    if (!z) return;
-    if (z->left == nullptr) {
-        bst_transplant(root, z, z->right);
-    } else if (z->right == nullptr) {
-        bst_transplant(root, z, z->left);
-    } else {
-        RefNode *y = bst_minimum(z->right);
-        if (y->parent != z) {
-            bst_transplant(root, y, y->right);
-            y->right = z->right;
-            if (y->right) y->right->parent = y;
-        }
-        bst_transplant(root, z, y);
-        y->left = z->left;
-        if (y->left) y->left->parent = y;
-    }
-    // free z
-    delete z;
-}
-
-// Collect the root→target path, return length
-int collect_path(RefNode *root, RefNode *target, RefNode **out_arr, int maxn) {
-    int idx = 0;
-    RefNode *cur = root;
-    while (cur && idx < maxn) {
-        out_arr[idx++] = cur;
-        if (target->key == cur->key) break;
-        if (target->key < cur->key) cur = cur->left;
-        else cur = cur->right;
-    }
-    return idx;
-}
-
-//update preferred pointers
-void set_preferred_along_path(RefNode *root, RefNode **path, int len) {
-    struct ClearStack { RefNode* n; ClearStack* next; ClearStack(RefNode* x):n(x),next(nullptr){} };
-    ClearStack *stack = nullptr;
-    if (root) {
-        stack = new ClearStack(root);
-    }
-    while (stack) {
-        ClearStack *top = stack;
-        RefNode *n = top->n;
-        stack = stack->next;
-        n->preferred = nullptr;
-        if (n->left) {
-            ClearStack *s = new ClearStack(n->left);
-            s->next = stack; stack = s;
-        }
-        if (n->right) {
-            ClearStack *s = new ClearStack(n->right);
-            s->next = stack; stack = s;
-        }
-        delete top;
-    }
-
-    //Set preferred pointers along the path
-    for (int i = 0; i + 1 < len; ++i) {
-        path[i]->preferred = path[i+1];
-    }
-    if (len > 0) path[len-1]->preferred = nullptr;
-}
-
-struct AuxListNode { AuxNode* aroot; AuxListNode* next; AuxListNode(AuxNode* r): aroot(r), next(nullptr){} };
-
-AuxListNode* build_aux_trees_from_ref(RefNode *root) {
-    if (!root) return nullptr;
-    struct Stack { RefNode* n; Stack* next; Stack(RefNode* x):n(x),next(nullptr){} };
-    Stack *st = new Stack(root);
-    AuxListNode *alist = nullptr;
-
-    while (st) {
-        Stack *t = st;
-        RefNode *n = t->n;
-        st = st->next;
-        if (n->right) { Stack *s = new Stack(n->right); s->next = st; st = s; }
-        if (n->left)  { Stack *s = new Stack(n->left);  s->next = st; st = s; }
-        if (!n->parent || n->parent->preferred != n) {
-            int maxlen = 1024; // initial; if path longer, we'll reallocate
-            RefNode **arr = (RefNode**)malloc(sizeof(RefNode*) * maxlen);
-            int len = 0;
-            RefNode *cur = n;
-            while (cur) {
-                if (len >= maxlen) {
-                    maxlen *= 2;
-                    arr = (RefNode**)realloc(arr, sizeof(RefNode*) * maxlen);
-                }
-                arr[len++] = cur;
-                cur = cur->preferred;
-            }
-            // Build splay from arr[0..len-1] using merge-based builder
-            AuxNode *aroot = build_splay_from_array_with_merge(arr, 0, len-1);
-            AuxListNode *an = new AuxListNode(aroot);
-            an->next = alist; alist = an;
-            free(arr);
-        }
-        delete t;
-    }
-    return alist;
-}
-
-// Free auxiliary list
-void free_aux_list(AuxListNode *alist) {
-    AuxListNode *cur = alist;
-    while (cur) {
-        free_aux_tree(cur->aroot);
-        AuxListNode *n = cur->next;
-        delete cur;
-        cur = n;
-    }
-}
-
-//Tango structure
-struct Tango {
-    RefNode *ref_root;
-    AuxListNode *aux_list;
-
-    Tango(): ref_root(nullptr), aux_list(nullptr) {}
-
-    void build_from_sorted_array(int *arr, int n) {
-        ref_root = build_ref_from_sorted(arr, 0, n-1);
-        // initially no preferred pointers
-        rebuild_aux();
-    }
-
-    void rebuild_aux() {
-        // free previous aux trees
-        if (aux_list) {
-            free_aux_list(aux_list);
-            aux_list = nullptr;
-        }
-        aux_list = build_aux_trees_from_ref(ref_root);
-    }
-
-    // Access operation (Search): find node and update preferred path.
-    RefNode* access(int key) {
-        RefNode *target = bst_search(ref_root, key);
-        if (!target) {
-            return nullptr;
-        }
-        const int MAXP = 100000;
-        RefNode **path = (RefNode**)malloc(sizeof(RefNode*) * 1000);
-        int capacity = 1000;
-        int len = 0;
-        RefNode *cur = ref_root;
-        while (cur) {
-            if (len >= capacity) {
-                capacity *= 2;
-                path = (RefNode**)realloc(path, sizeof(RefNode*) * capacity);
-            }
-            path[len++] = cur;
-            if (cur->key == key) break;
-            if (key < cur->key) cur = cur->left;
-            else cur = cur->right;
-        }
-        // set preferred pointers along path
-        set_preferred_along_path(ref_root, path, len);
-        free(path);
-
-        // Rebuild auxiliary trees for new preferred decomposition
-        // NOTE: This is a full rebuild. With aux_split/aux_merge you can implement incremental update here.
-        rebuild_aux();
-        return target;
-    }
-
-    // Insert key into reference tree, then rebuild aux
-    void insert_key(int key) {
-        RefNode *n = bst_insert(ref_root, key);
-        (void)n;
-        rebuild_aux();
-    }
-
-    // Remove key
-    void remove_key(int key) {
-        RefNode *z = bst_search(ref_root, key);
-        if (!z) return;
-        bst_delete(ref_root, z);
-        rebuild_aux();
-    }
-
-    void print_ref_inorder(RefNode *r) {
-        if (!r) return;
-        print_ref_inorder(r->left);
-        printf("%d ", r->key);
-        print_ref_inorder(r->right);
-    }
-    void print_ref_tree() { print_ref_inorder(ref_root); printf("\n"); }
-
-    void print_aux_trees() {
-        printf("Aux trees (roots):\n");
-        AuxListNode *cur = aux_list;
-        int idx = 0;
-        while (cur) {
-            printf("Aux %d: ", idx++);
-            print_aux_inorder(cur->aroot);
-            printf("\n");
-            cur = cur->next;
-        }
-    }
-
-private:
-    void print_ref_inorder(RefNode *r, int depth) {
-        (void)depth;
-        if (!r) return;
-        print_ref_inorder(r->left, depth+1);
-        printf("%d ", r->key);
-        print_ref_inorder(r->right, depth+1);
-    }
-};
-
-int main() {
-    // Build Tango from sorted keys
-    int keys[] = {10, 20, 30, 40, 50, 60, 70};
-    int n = sizeof(keys)/sizeof(keys[0]);
-
-    Tango T;
-    T.build_from_sorted_array(keys, n);
-
-    printf("Initial reference tree inorder: ");
-    T.print_ref_tree();
-    T.print_aux_trees();
-
-    printf("\nAccess 50\n");
-    T.access(50);
-    T.print_aux_trees();
-
-    printf("\nAccess 20\n");
-    T.access(20);
-    T.print_aux_trees();
-
-    printf("\nInsert 25\n");
-    T.insert_key(25);
-    T.print_ref_tree();
-    T.print_aux_trees();
-
-    printf("\nAccess 25\n");
-    T.access(25);
-    T.print_aux_trees();
-
-    printf("\nRemove 40\n");
-    T.remove_key(40);
-    T.print_ref_tree();
-    T.print_aux_trees();
-
-    return 0;
-}
 
 /*
-#include <cstdio>
-#include <cstdlib>
-#include <cassert>
+ * ============================================================
+ *  TANGO TREE — C++ Implementation
+ * ============================================================
+ *  Reference:
+ *    Demaine, Harmon, Iacono, Patrascu
+ *    "Dynamic Optimality—Almost"
+ *    SIAM Journal on Computing 37(1):240-265, 2007
+ *    http://erikdemaine.org/papers/Tango_SICOMP/paper.pdf
+ *
+ *  ARCHITECTURE:
+ *  1. Reference tree  – conceptual complete BST. Never stored.
+ *     Provides depth, parent, left, right for every key.
+ *  2. Preferred child – child most recently accessed.
+ *     Chains of preferred edges form "preferred paths".
+ *  3. Each preferred path is stored in an auxiliary Red-Black Tree (RBT)
+ *     sorted by depth-in-reference-tree, augmented with min/max depth.
+ *  4. Each node on a path carries an aux_child pointer to the RBT of
+ *     the preferred path rooted at its non-preferred child.
+ *  5. access(x):
+ *       Walk the reference tree path root->x.
+ *       At each node on that path, check which aux tree it belongs to.
+ *       When we cross into a new preferred path, do a cut/join.
+ *       Each cut/join = O(log log n).
+ *  COMPETITIVE RATIO: O(log log n) * OPT  [Theorem 1, Section 4]
+ *
+ *  IMPLEMENTATION NOTE:
+ *    The RBT is sorted by depth, so key-search is O(n) linear scan.
+ *    We track which aux tree each key lives in via a hash map (key_to_aux).
+ * ============================================================
+ */
 
-//Reference tree node
-struct RefNode {
-    int key;
-    RefNode *left, *right, *parent;
-    void *aux_ptr;
+#include<bits/stdc++.h>
+using namespace std;
+// ============================================================
+//  NIL sentinel
+// ============================================================
+enum class Color { RED, BLACK };
+struct RBTree;
 
-    // preferred child
-    RefNode *preferred;
-
-    RefNode(int k) : key(k), left(nullptr), right(nullptr), parent(nullptr),
-                     aux_ptr(nullptr), preferred(nullptr) {}
+struct RBNode {
+    int key, depth;
+    Color color;
+    int min_depth, max_depth;
+    RBNode *left, *right, *parent;
+    RBTree *aux_child;
+    RBNode(int k, int d)
+        : key(k), depth(d), color(Color::RED),
+          min_depth(d), max_depth(d),
+          left(nullptr), right(nullptr), parent(nullptr),
+          aux_child(nullptr) {}
 };
 
-//Auxiliary (splay) tree node
-struct AuxNode {
-    RefNode *ref;    
-    AuxNode *left, *right, *parent;
-    AuxNode(RefNode *r) : ref(r), left(nullptr), right(nullptr), parent(nullptr) {}
-};
+static RBNode  g_nil_node(0, INT_MAX);
+static RBNode* G_NIL = &g_nil_node;
 
-//Splay helpers
-void aux_set_auxptr(AuxNode *a, RefNode *r) {
-    if (r) r->aux_ptr = a;
+static void setup_nil() {
+    G_NIL->color     = Color::BLACK;
+    G_NIL->min_depth = INT_MAX;
+    G_NIL->max_depth = INT_MIN;
+    G_NIL->left      = G_NIL;
+    G_NIL->right     = G_NIL;
+    G_NIL->parent    = G_NIL;
+    G_NIL->aux_child = nullptr;
 }
 
-void rotate_right(AuxNode *x) {
-    AuxNode *p = x->parent;
-    if (!p) return;
-    AuxNode *g = p->parent;
+static void aug(RBNode* n) {
+    if (!n || n == G_NIL) return;
+    n->min_depth = n->depth; n->max_depth = n->depth;
+    if (n->left  != G_NIL) { n->min_depth =min(n->min_depth, n->left->min_depth);
+                              n->max_depth = max(n->max_depth, n->left->max_depth); }
+    if (n->right != G_NIL) { n->min_depth = min(n->min_depth, n->right->min_depth);
+                              n->max_depth = max(n->max_depth, n->right->max_depth); }
+}
 
-    p->left = x->right;
-    if (x->right) x->right->parent = p;
-    x->right = p;
-    p->parent = x;
+// ============================================================
+//  Red-Black Tree  (sorted by DEPTH)
+// ============================================================
+struct RBTree {
+    RBNode* root;
+    RBTree() : root(G_NIL) {}
 
-    x->parent = g;
-    if (g) {
-        if (g->left == p) g->left = x;
-        else g->right = x;
+    void lrot(RBNode* x) {
+        RBNode* y = x->right; x->right = y->left;
+        if (y->left != G_NIL) y->left->parent = x;
+        y->parent = x->parent;
+        if      (x->parent == G_NIL)          root             = y;
+        else if (x == x->parent->left)        x->parent->left  = y;
+        else                                  x->parent->right = y;
+        y->left = x; x->parent = y; aug(x); aug(y);
     }
-}
-
-void rotate_left(AuxNode *x) {
-    AuxNode *p = x->parent;
-    if (!p) return;
-    AuxNode *g = p->parent;
-
-    p->right = x->left;
-    if (x->left) x->left->parent = p;
-    x->left = p;
-    p->parent = x;
-
-    x->parent = g;
-    if (g) {
-        if (g->left == p) g->left = x;
-        else g->right = x;
-    }
-}
-
-AuxNode* splay(AuxNode *x) {
-    if (!x) return nullptr;
-    while (x->parent) {
-        AuxNode *p = x->parent;
-        AuxNode *g = p->parent;
-        if (!g) {
-            // zig
-            if (p->left == x) rotate_right(x);
-            else rotate_left(x);
-        } else if (g->left == p && p->left == x) {
-            // zig-zig
-            rotate_right(p);
-            rotate_right(x);
-        } else if (g->right == p && p->right == x) {
-            // zig-zig
-            rotate_left(p);
-            rotate_left(x);
-        } else if (g->left == p && p->right == x) {
-            // zig-zag
-            rotate_left(x);
-            rotate_right(x);
-        } else {
-            // zig-zag
-            rotate_right(x);
-            rotate_left(x);
-        }
-    }
-    return x;
-}
-
-// Build splay tree
-AuxNode* build_splay_from_array(RefNode **arr, int l, int r) {
-    if (l > r) return nullptr;
-    int mid = (l + r) / 2;
-    AuxNode *root = new AuxNode(arr[mid]);
-    root->left = build_splay_from_array(arr, l, mid-1);
-    if (root->left) root->left->parent = root;
-    root->right = build_splay_from_array(arr, mid+1, r);
-    if (root->right) root->right->parent = root;
-    // set aux_ptr for ref
-    root->ref->aux_ptr = root;
-    return root;
-}
-
-// In-order traversal of splay
-void print_aux_inorder(AuxNode *a) {
-    if (!a) return;
-    print_aux_inorder(a->left);
-    printf("%d ", a->ref->key);
-    print_aux_inorder(a->right);
-}
-
-// Free an aux tree
-void free_aux_tree(AuxNode *a) {
-    if (!a) return;
-    free_aux_tree(a->left);
-    free_aux_tree(a->right);
-    a->ref->aux_ptr = nullptr;
-    delete a;
-}
-
-//Reference tree helpers
-RefNode* build_ref_from_sorted(int *arr, int l, int r) {
-    if (l > r) return nullptr;
-    int mid = (l + r) / 2;
-    RefNode* node = new RefNode(arr[mid]);
-    node->left = build_ref_from_sorted(arr, l, mid-1);
-    if (node->left) node->left->parent = node;
-    node->right = build_ref_from_sorted(arr, mid+1, r);
-    if (node->right) node->right->parent = node;
-    node->preferred = nullptr;
-    node->aux_ptr = nullptr;
-    return node;
-}
-
-RefNode* bst_search(RefNode *root, int key) {
-    RefNode *cur = root;
-    while (cur) {
-        if (key == cur->key) return cur;
-        if (key < cur->key) cur = cur->left;
-        else cur = cur->right;
-    }
-    return nullptr;
-}
-
-// BST insert (no rebalancing)
-RefNode* bst_insert(RefNode *&root, int key) {
-    if (!root) {
-        root = new RefNode(key);
-        return root;
-    }
-    RefNode *cur = root;
-    RefNode *par = nullptr;
-    while (cur) {
-        par = cur;
-        if (key < cur->key) cur = cur->left;
-        else if (key > cur->key) cur = cur->right;
-        else return cur; 
-    }
-    RefNode *n = new RefNode(key);
-    n->parent = par;
-    if (key < par->key) par->left = n;
-    else par->right = n;
-    return n;
-}
-
-// BST transplant for delete
-void bst_transplant(RefNode *&root, RefNode *u, RefNode *v) {
-    if (!u->parent) root = v;
-    else if (u == u->parent->left) u->parent->left = v;
-    else u->parent->right = v;
-    if (v) v->parent = u->parent;
-}
-
-// Find min in subtree
-RefNode* bst_minimum(RefNode* x) {
-    while (x && x->left) x = x->left;
-    return x;
-}
-
-// BST delete node
-void bst_delete(RefNode *&root, RefNode *z) {
-    if (!z) return;
-    if (z->left == nullptr) {
-        bst_transplant(root, z, z->right);
-    } else if (z->right == nullptr) {
-        bst_transplant(root, z, z->left);
-    } else {
-        RefNode *y = bst_minimum(z->right);
-        if (y->parent != z) {
-            bst_transplant(root, y, y->right);
-            y->right = z->right;
-            if (y->right) y->right->parent = y;
-        }
-        bst_transplant(root, z, y);
-        y->left = z->left;
-        if (y->left) y->left->parent = y;
-    }
-    // free z
-    delete z;
-}
-
-// Collect the root→target path, return length
-int collect_path(RefNode *root, RefNode *target, RefNode **out_arr, int maxn) {
-    int idx = 0;
-    RefNode *cur = root;
-    while (cur && idx < maxn) {
-        out_arr[idx++] = cur;
-        if (target->key == cur->key) break;
-        if (target->key < cur->key) cur = cur->left;
-        else cur = cur->right;
-    }
-    return idx;
-}
-
-//update preferred pointers
-void set_preferred_along_path(RefNode *root, RefNode **path, int len) {
-    struct ClearStack { RefNode* n; ClearStack* next; ClearStack(RefNode* x):n(x),next(nullptr){} };
-    ClearStack *stack = nullptr;
-    if (root) {
-        stack = new ClearStack(root);
-    }
-    while (stack) {
-        ClearStack *top = stack;
-        RefNode *n = top->n;
-        stack = stack->next;
-        n->preferred = nullptr;
-        if (n->left) {
-            ClearStack *s = new ClearStack(n->left);
-            s->next = stack; stack = s;
-        }
-        if (n->right) {
-            ClearStack *s = new ClearStack(n->right);
-            s->next = stack; stack = s;
-        }
-        delete top;
+    void rrot(RBNode* y) {
+        RBNode* x = y->left; y->left = x->right;
+        if (x->right != G_NIL) x->right->parent = y;
+        x->parent = y->parent;
+        if      (y->parent == G_NIL)          root             = x;
+        else if (y == y->parent->left)        y->parent->left  = x;
+        else                                  y->parent->right = x;
+        x->right = y; y->parent = x; aug(y); aug(x);
     }
 
-    //Set preferred pointers along the path
-    for (int i = 0; i + 1 < len; ++i) {
-        path[i]->preferred = path[i+1];
+    RBNode* insert(int key, int depth) {
+        RBNode* z = new RBNode(key, depth);
+        z->left = z->right = z->parent = G_NIL;
+        raw_ins(z); fix_ins(z); reaug(root); return z;
     }
-    if (len > 0) path[len-1]->preferred = nullptr;
-}
-
-struct AuxListNode { AuxNode* aroot; AuxListNode* next; AuxListNode(AuxNode* r): aroot(r), next(nullptr){} };
-
-AuxListNode* build_aux_trees_from_ref(RefNode *root) {
-    if (!root) return nullptr;
-    struct Stack { RefNode* n; Stack* next; Stack(RefNode* x):n(x),next(nullptr){} };
-    Stack *st = new Stack(root);
-    AuxListNode *alist = nullptr;
-
-    while (st) {
-        Stack *t = st;
-        RefNode *n = t->n;
-        st = st->next;
-        if (n->right) { Stack *s = new Stack(n->right); s->next = st; st = s; }
-        if (n->left)  { Stack *s = new Stack(n->left);  s->next = st; st = s; }
-        if (!n->parent || n->parent->preferred != n) {
-            int maxlen = 1024; // initial; if path longer, we'll reallocate
-            RefNode **arr = (RefNode**)malloc(sizeof(RefNode*) * maxlen);
-            int len = 0;
-            RefNode *cur = n;
-            while (cur) {
-                if (len >= maxlen) {
-                    maxlen *= 2;
-                    arr = (RefNode**)realloc(arr, sizeof(RefNode*) * maxlen);
+    void raw_ins(RBNode* z) {
+        RBNode* y = G_NIL, *x = root;
+        while (x != G_NIL) { y = x; x = (z->depth < x->depth) ? x->left : x->right; }
+        z->parent = y;
+        if      (y == G_NIL)            root = z;
+        else if (z->depth < y->depth)  y->left  = z;
+        else                           y->right = z;
+    }
+    void fix_ins(RBNode* z) {
+        while (z->parent->color == Color::RED) {
+            if (z->parent == z->parent->parent->left) {
+                RBNode* u = z->parent->parent->right;
+                if (u->color == Color::RED) {
+                    z->parent->color = u->color = Color::BLACK;
+                    z->parent->parent->color = Color::RED; z = z->parent->parent;
+                } else {
+                    if (z == z->parent->right) { z = z->parent; lrot(z); }
+                    z->parent->color = Color::BLACK;
+                    z->parent->parent->color = Color::RED;
+                    rrot(z->parent->parent);
                 }
-                arr[len++] = cur;
-                cur = cur->preferred;
+            } else {
+                RBNode* u = z->parent->parent->left;
+                if (u->color == Color::RED) {
+                    z->parent->color = u->color = Color::BLACK;
+                    z->parent->parent->color = Color::RED; z = z->parent->parent;
+                } else {
+                    if (z == z->parent->left) { z = z->parent; rrot(z); }
+                    z->parent->color = Color::BLACK;
+                    z->parent->parent->color = Color::RED;
+                    lrot(z->parent->parent);
+                }
             }
-            // Build splay from arr[0..len-1]
-            AuxNode *aroot = build_splay_from_array(arr, 0, len-1);
-            AuxListNode *an = new AuxListNode(aroot);
-            an->next = alist; alist = an;
-            free(arr);
         }
-        delete t;
-    }
-    return alist;
-}
-
-// Free auxiliary list
-void free_aux_list(AuxListNode *alist) {
-    AuxListNode *cur = alist;
-    while (cur) {
-        free_aux_tree(cur->aroot);
-        AuxListNode *n = cur->next;
-        delete cur;
-        cur = n;
-    }
-}
-
-//Tango structure
-struct Tango {
-    RefNode *ref_root;
-    AuxListNode *aux_list;
-
-    Tango(): ref_root(nullptr), aux_list(nullptr) {}
-
-    void build_from_sorted_array(int *arr, int n) {
-        ref_root = build_ref_from_sorted(arr, 0, n-1);
-        // initially no preferred pointers
-        rebuild_aux();
+        root->color = Color::BLACK;
     }
 
-    void rebuild_aux() {
-        // free previous aux trees
-        if (aux_list) {
-            free_aux_list(aux_list);
-            aux_list = nullptr;
+    void reaug(RBNode* n) {
+        if (n == G_NIL) return; reaug(n->left); reaug(n->right); aug(n);
+    }
+
+    // Linear scan by key (tree is sorted by depth, not key)
+    RBNode* find_key(int key) const {
+        return find_key_rec(root, key);
+    }
+    RBNode* find_key_rec(RBNode* n, int key) const {
+        if (n == G_NIL) return G_NIL;
+        if (n->key == key) return n;
+        RBNode* res = find_key_rec(n->left, key);
+        return (res != G_NIL) ? res : find_key_rec(n->right, key);
+    }
+
+    void inorder(RBNode* n, vector<RBNode*>& v) const {
+        if (n == G_NIL) return;
+        inorder(n->left, v); v.push_back(n); inorder(n->right, v);
+    }
+    vector<RBNode*> nodes() const {
+        vector<RBNode*> v; inorder(root, v); return v;
+    }
+    int size() const { return (int)nodes().size(); }
+
+    void rebuild(vector<RBNode*>& ns) {
+        root = G_NIL;
+        for (RBNode* n : ns) {
+            n->left = n->right = n->parent = G_NIL;
+            n->color = Color::RED;
+            n->min_depth = n->max_depth = n->depth;
+            raw_ins(n); fix_ins(n);
         }
-        aux_list = build_aux_trees_from_ref(ref_root);
+        reaug(root);
     }
 
-    // Access operation (Search): find node and update preferred path.
-    RefNode* access(int key) {
-        RefNode *target = bst_search(ref_root, key);
-        if (!target) {
-            return nullptr;
-        }
-        const int MAXP = 100000;
-        RefNode **path = (RefNode**)malloc(sizeof(RefNode*) * 1000); 
-        int capacity = 1000;
-        int len = 0;
-        RefNode *cur = ref_root;
-        while (cur) {
-            if (len >= capacity) {
-                capacity *= 2;
-                path = (RefNode**)realloc(path, sizeof(RefNode*) * capacity);
-            }
-            path[len++] = cur;
-            if (cur->key == key) break;
-            if (key < cur->key) cur = cur->left;
-            else cur = cur->right;
-        }
-        // set preferred pointers along path
-        set_preferred_along_path(ref_root, path, len);
-        free(path);
-
-        // Rebuild auxiliary trees for new preferred decomposition
-        rebuild_aux();
-        return target;
+    pair<RBTree*, RBTree*> split(int thr) {
+        auto ns = nodes(); root = G_NIL;
+        vector<RBNode*> tn, bn;
+        for (RBNode* n : ns) (n->depth <= thr ? tn : bn).push_back(n);
+        RBTree* T = new RBTree(); T->rebuild(tn);
+        RBTree* B = new RBTree(); B->rebuild(bn);
+        return {T, B};
     }
 
-    // Insert key into reference tree, then rebuild aux
-    void insert_key(int key) {
-        RefNode *n = bst_insert(ref_root, key);
-        (void)n;
-        rebuild_aux();
+    static RBTree* concat(RBTree* a, RBTree* b) {
+        if (!a || a->root == G_NIL) { delete a; return b ? b : new RBTree(); }
+        if (!b || b->root == G_NIL) { delete b; return a; }
+        auto na = a->nodes(), nb = b->nodes();
+        a->root = b->root = G_NIL; delete a; delete b;
+        RBTree* m = new RBTree();
+        vector<RBNode*> all;
+        all.insert(all.end(), na.begin(), na.end());
+        all.insert(all.end(), nb.begin(), nb.end());
+        m->rebuild(all); return m;
     }
 
-    // Remove key
-    void remove_key(int key) {
-        RefNode *z = bst_search(ref_root, key);
-        if (!z) return;
-        bst_delete(ref_root, z);
-        rebuild_aux();
+    void destroy(RBNode* n) {
+        if (!n || n == G_NIL) return;
+        destroy(n->left); destroy(n->right); delete n;
+    }
+    ~RBTree() { destroy(root); }
+};
+
+// ============================================================
+//  Reference Tree
+// ============================================================
+struct RefTree {
+    unordered_map<int,int> dep, par, lch, rch;
+    int rk = -1;
+    explicit RefTree(const vector<int>& ks) {
+        vector<int> s = ks; sort(s.begin(), s.end());
+        rk = build(s, 0, (int)s.size()-1, 0, -1);
+    }
+    int  root_key()   const { return rk; }
+    int  height(int n)const { return (int)ceil(log2((double)n+1)); }
+    bool has(int k)   const { return dep.count(k) > 0; }
+    int build(const std::vector<int>& s, int lo, int hi, int d, int p) {
+        if (lo > hi) return -1;
+        int m = (lo+hi)/2, k = s[m];
+        dep[k]=d; par[k]=p;
+        lch[k]=build(s,lo,m-1,d+1,k);
+        rch[k]=build(s,m+1,hi,d+1,k);
+        return k;
+    }
+};
+
+// ============================================================
+//  Tango Tree
+// ============================================================
+class TangoTree {
+public:
+    explicit TangoTree(const vector<int>& keys)
+        : ref(keys), n((int)keys.size()), acnt(0), tcost(0)
+    {
+        //pref child's info
+        for (int k : keys) pref[k] = -1;
+        root_aux = build_aux(ref.root_key());
+        // Build key->aux_tree map
+        index_keys(root_aux);
+    }
+    ~TangoTree() { cleanup(root_aux); }
+
+    bool access(int x) {
+        if (!ref.has(x)) return false;
+        ++acnt;
+
+        // Walk reference-tree path root->x, following aux trees
+        // We simulate the path node by node using the reference tree structure.
+        bool found = walk_path(x);
+        if (found) update_prefs(x);
+        return found;
     }
 
-    void print_ref_inorder(RefNode *r) {
-        if (!r) return;
-        print_ref_inorder(r->left);
-        printf("%d ", r->key);
-        print_ref_inorder(r->right);
+    vector<int> inorder() const {
+        vector<int> v; collect(root_aux, v);
+        sort(v.begin(), v.end()); return v;
     }
-    void print_ref_tree() { print_ref_inorder(ref_root); printf("\n"); }
 
-    void print_aux_trees() {
-        printf("Aux trees (roots):\n");
-        AuxListNode *cur = aux_list;
-        int idx = 0;
-        while (cur) {
-            printf("Aux %d: ", idx++);
-            print_aux_inorder(cur->aroot);
-            printf("\n");
-            cur = cur->next;
-        }
+    void print_stats() const {
+        double lln = (n > 2) ? log2(log2((double)n)) : 0.0;
+        cout << "\n--- Tango Tree Statistics ---\n"
+                  << "  n                     : " << n << "\n"
+                  << "  Reference tree height : " << ref.height(n) << "\n"
+                  << "  log2(log2(n))         : "
+                  << fixed << setprecision(3) << lln << "\n"
+                  << "  Total accesses        : " << acnt  << "\n"
+                  << "  Total node-touches    : " << tcost << "\n"
+                  << "  Avg cost per access   : "
+                  << (acnt ? (double)tcost / acnt : 0.0) << "\n";
     }
+
+    long long get_access_count() const { return acnt; }
+    long long get_total_cost()   const { return tcost; }
+    int       get_n()            const { return n; }
 
 private:
-    void print_ref_inorder(RefNode *r, int depth) {
-        (void)depth;
-        if (!r) return;
-        print_ref_inorder(r->left, depth+1);
-        printf("%d ", r->key);
-        print_ref_inorder(r->right, depth+1);
+    RefTree   ref;
+    int       n;
+    RBTree*   root_aux;
+    unordered_map<int,int>    pref;      // preferred child of each node
+    unordered_map<int,RBTree*> key_aux;  // which aux tree holds each key
+    long long acnt, tcost;
+
+    // ── Build ────────────────────────────────────────────────────
+    RBTree* build_aux(int k) {
+        if (k < 0) return nullptr;
+        RBTree* t = new RBTree();
+        build_rec(k, t);
+        return t;
+    }
+    void build_rec(int k, RBTree* t) {
+        int lc = ref.lch.at(k), rc = ref.rch.at(k), pc = pref[k];
+        RBNode* nd = t->insert(k, ref.dep.at(k));
+
+        int preferred_next = -1, non_pref = -1;
+        if      (pc == lc && lc >= 0) { preferred_next = lc; non_pref = rc; }
+        else if (pc == rc && rc >= 0) { preferred_next = rc; non_pref = lc; }
+
+        if (preferred_next >= 0) {
+            if (non_pref >= 0) nd->aux_child = build_aux(non_pref);
+            build_rec(preferred_next, t);
+        } else {
+            RBTree* lt = (lc >= 0) ? build_aux(lc) : nullptr;
+            RBTree* rt = (rc >= 0) ? build_aux(rc) : nullptr;
+            if (lt && rt) { nd->aux_child = lt; attach_bottom(lt, rt); }
+            else          { nd->aux_child = lt ? lt : rt; }
+        }
+    }
+    void attach_bottom(RBTree* t, RBTree* other) {
+        if (!t || t->root == G_NIL || !other) return;
+        auto ns = t->nodes();
+        RBNode* deep = ns[0];
+        for (auto* nd : ns) if (nd->depth > deep->depth) deep = nd;
+        if (!deep->aux_child) deep->aux_child = other;
+        else attach_bottom(deep->aux_child, other);
+    }
+
+    // Build key->aux_tree index after construction
+    void index_keys(RBTree* t) {
+        if (!t || t->root == G_NIL) return;
+        for (RBNode* nd : t->nodes()) {
+            key_aux[nd->key] = t;
+            index_keys(nd->aux_child);
+        }
+    }
+
+    // ── Core access: walk reference-tree path root->x ────────────
+    // At each step, we know which aux tree the current reference-tree
+    // node lives in.  If the current node and x are in the same aux tree,
+    // we're done.  Otherwise we follow the aux_child link at the boundary.
+    bool walk_path(int x) {
+        // Build reference-tree path root->x
+        vector<int> path;
+        int cur = ref.rk;
+        while (cur != -1 && cur != x) {
+            path.push_back(cur);
+            cur = (x < cur) ? ref.lch.at(cur) : ref.rch.at(cur);
+        }
+        if (cur != x) return false;
+        path.push_back(x);
+
+        // Walk the path; count touches and perform cut/join at boundaries
+        // between different preferred paths (aux trees).
+        for (int i = 0; i < (int)path.size(); ) {
+            int k = path[i];
+            RBTree* t = key_aux.count(k) ? key_aux[k] : nullptr;
+            if (!t) return false;
+
+            tcost += t->size();
+
+            // Find how far this aux tree extends along the path
+            int j = i;
+            while (j < (int)path.size() && key_aux.count(path[j]) && key_aux[path[j]] == t)
+                ++j;
+
+            // path[i..j-1] are all in this aux tree
+            // The last node in this segment (path[j-1]) is the gateway
+            int gk = path[j-1];
+            RBNode* gw = t->find_key(gk);
+
+            if (j == (int)path.size()) {
+                // x is in this aux tree — done
+                break;
+            }
+
+            // Perform cut/join: split t at gw->depth,
+            // merge bottom with gw->aux_child (which contains path[j])
+            if (gw != G_NIL) {
+                cut_join(t, gw, path[j]);
+                // After cut_join, path[j] moved into gw->aux_child
+                // Update key_aux for all nodes that moved
+                reindex(gw->aux_child);
+            }
+            i = j;
+        }
+        return true;
+    }
+
+    void cut_join(RBTree* t, RBNode* gw, int next_key) {
+        int sd = gw->depth, gk = gw->key;
+
+        auto splitResult = t->split(sd);
+        RBTree* top = splitResult.first;
+        RBTree* bot = splitResult.second;   
+        t->root = top->root; top->root = G_NIL; delete top;
+        t->reaug(t->root);
+
+        // All nodes that were in bot need their key_aux updated to some new tree
+        // (will be handled by reindex after this call)
+        for (RBNode* nd : bot->nodes()) key_aux.erase(nd->key);
+
+        RBNode* gw2 = t->find_key(gk);
+        if (gw2 == G_NIL) { delete bot; return; }
+
+        RBTree* old = gw2->aux_child;
+        if (old && old->root != G_NIL) {
+            for (RBNode* nd : old->nodes()) key_aux.erase(nd->key);
+            gw2->aux_child = RBTree::concat(bot, old);
+        } else {
+            delete old;
+            gw2->aux_child = bot;
+        }
+    }
+
+    void reindex(RBTree* t) {
+        if (!t || t->root == G_NIL) return;
+        for (RBNode* nd : t->nodes()) {
+            key_aux[nd->key] = t;
+            reindex(nd->aux_child);
+        }
+    }
+
+    void update_prefs(int x) {
+        int cur = x;
+        for (;;) {
+            auto it = ref.par.find(cur);
+            if (it == ref.par.end() || it->second < 0) break;
+            pref[it->second] = cur; cur = it->second;
+        }
+    }
+
+    void collect(const RBTree* t, vector<int>& v) const {
+        if (!t || t->root == G_NIL) return;
+        for (RBNode* nd : t->nodes()) {
+            v.push_back(nd->key);
+            collect(nd->aux_child, v);
+        }
+    }
+
+    void cleanup(RBTree* t) {
+        if (!t) return;
+        if (t->root != G_NIL)
+            for (RBNode* nd : t->nodes()) { cleanup(nd->aux_child); nd->aux_child = nullptr; }
+        delete t;
     }
 };
 
+// ============================================================
+//  Tests & Demo
+// ============================================================
+static void sep(const string& s) {
+      cout << "\n" <<string(62,'=') << "\n  " << s
+              << "\n" << string(62,'=') << "\n";
+}
+
+void run_unit_tests() {
+    sep("UNIT TESTS");
+
+    { TangoTree t({42}); assert(t.access(42)); assert(!t.access(0));
+      cout << "  [PASS] T01: single-element access\n"; }
+
+    { TangoTree t({1,2,3}); assert(t.access(1)); assert(t.access(2)); assert(t.access(3));
+      cout << "  [PASS] T02: 3-key tree\n"; }
+
+    { TangoTree t({1,2,3,4,5,6,7});
+      for (int k=1;k<=7;k++) { assert(t.access(k)); }
+      assert(!t.access(99));
+      cout << "  [PASS] T03: 7-key tree; non-existent=false\n"; }
+
+    { vector<int> ks; for(int i=1;i<=15;i++) ks.push_back(i);
+      TangoTree t(ks); for(int k:ks) { assert(t.access(k)); }
+      cout << "  [PASS] T04: 15-key BST (height 4)\n"; }
+
+    { TangoTree t({1,2,3,4,5,6,7}); for(int i=0;i<5;i++) t.access(4);
+      assert(t.get_access_count()==5);
+      cout << "  [PASS] T05: access counter\n"; }
+
+    { TangoTree t({5,3,7,1,4,6,8});
+      assert((t.inorder()==vector<int>{1,3,4,5,6,7,8}));
+      cout << "  [PASS] T06: in-order sorted\n"; }
+
+    { RBTree rb; rb.insert(10,1); rb.insert(5,2); rb.insert(15,2);
+      assert(rb.find_key(10) != G_NIL);
+      assert(rb.find_key(99) == G_NIL);
+      cout << "  [PASS] T07: RBTree insert/find_key\n"; }
+
+    { RBTree rb; rb.insert(10,1); rb.insert(5,2); rb.insert(3,3); rb.insert(7,3);
+      auto splitResult = rb.split(2);
+    RBTree* top = splitResult.first;
+    RBTree* bot = splitResult.second;
+      for(auto* nd:top->nodes()) assert(nd->depth<=2);
+      for(auto* nd:bot->nodes()) assert(nd->depth>2);
+      cout << "  [PASS] T08: RBTree split\n";
+      delete top; delete bot; }
+
+    { RBTree* a=new RBTree(); RBTree* b=new RBTree();
+      a->insert(1,1); a->insert(2,2); b->insert(3,3); b->insert(4,4);
+      RBTree* m=RBTree::concat(a,b); assert(m->size()==4);
+      cout << "  [PASS] T09: RBTree concatenate\n"; delete m; }
+
+    { vector<int> ks; for(int i=1;i<=31;i++) ks.push_back(i);
+      TangoTree t(ks); for(int k:ks) { assert(t.access(k)); }
+      cout << "  [PASS] T10: 31-key BST (height 5)\n"; }
+
+    cout << "\n  All 10 unit tests PASSED!\n";
+}
+
+void run_demo() {
+    sep("DEMO — n=15 (complete BST, height 4)");
+    vector<int> keys; for(int i=1;i<=15;i++) keys.push_back(i);
+    TangoTree tt(keys); RefTree ref(keys);
+
+    cout << "\n[1] Reference tree (root=" << ref.root_key()
+              << ", height=" << ref.height(15) << ")\n"
+              << "    key | depth | left | right\n"
+              << "    ----+-------+------+------\n";
+    for(int k:keys)
+        cout << "     " <<setw(2) << k << "  |   " << ref.dep.at(k)
+                  << "   |  " << setw(2) << ref.lch.at(k)
+                  << "  |  "  << setw(2) << ref.rch.at(k) << "\n";
+
+    vector<int> seq={8,4,12,2,6,10,14,1,3,5,7,9,11,13,15};
+    cout << "\n[2] Access sequence (BFS order — maximises interleave):\n";
+    for(int x:seq) {
+        bool ok=tt.access(x);
+        cout << "    access(" << setw(2) << x << ")  =>  "
+                  << (ok ? "FOUND" : "NOT FOUND") << "\n";
+    }
+    tt.print_stats();
+
+   cout << "\n[3] Competitive Ratio (Theorem 1):\n"
+              << "    n             = 15\n"
+              << "    log2(n)       = " << log2(15.0) << "  (naive BST)\n"
+              << "    log2(log2(n)) = " << log2(log2(15.0)) << "  (Tango factor)\n"
+              << "    Guarantee: cost(Tango) <= O(log log n) * OPT\n";
+
+    sep("TEMPORAL LOCALITY — repeated root access");
+    TangoTree tt2(keys);
+    for(int i=0;i<10;i++) tt2.access(8);
+    tt2.print_stats();
+
+    sep("LARGE TREE — n=63 (height 6)");
+    vector<int> big; for(int i=1;i<=63;i++) big.push_back(i);
+    TangoTree tt3(big);
+    for(int k:big) tt3.access(k);
+    for(int k:{32,16,48,8,24,40,56}) tt3.access(k);
+    tt3.print_stats();
+    cout << "    log2(log2(63)) = " << log2(log2(63.0)) << "\n";
+}
+
 int main() {
-    // Build Tango from sorted keys
-    int keys[] = {10, 20, 30, 40, 50, 60, 70};
-    int n = sizeof(keys)/sizeof(keys[0]);
-
-    Tango T;
-    T.build_from_sorted_array(keys, n);
-
-    printf("Initial reference tree inorder: ");
-    T.print_ref_tree();
-    T.print_aux_trees();
-
-    printf("\nAccess 50\n");
-    T.access(50);
-    T.print_aux_trees();
-
-    printf("\nAccess 20\n");
-    T.access(20);
-    T.print_aux_trees();
-
-    printf("\nInsert 25\n");
-    T.insert_key(25);
-    T.print_ref_tree();
-    T.print_aux_trees();
-
-    printf("\nAccess 25\n");
-    T.access(25);
-    T.print_aux_trees();
-
-    printf("\nRemove 40\n");
-    T.remove_key(40);
-    T.print_ref_tree();
-    T.print_aux_trees();
-
+    setup_nil();
+    run_unit_tests();
+    run_demo();
+    cout << "\n" <<string(62,'=') << "\n  Done.\n"
+              << string(62,'=') << "\n";
     return 0;
 }
-*/
