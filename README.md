@@ -8,7 +8,7 @@ The project focuses on translating the theoretical design of Tango Trees into a 
 ## Key Ideas
 Tango Trees are built using the following core concepts:
 - Preferred Path Decomposition, where frequently accessed paths are identified dynamically
-- Auxiliary Binary Search Trees to represent preferred paths efficiently
+- Auxiliary Red Black Trees to represent preferred paths efficiently
 - Dynamic restructuring of the tree after each access to reflect updated preferences
 
 These techniques allow the data structure to adapt to sequences of searches while maintaining near-optimal performance.
@@ -17,7 +17,7 @@ These techniques allow the data structure to adapt to sequences of searches whil
 - Language: C++
 - Pointer-based tree representation
 - Implementation of:
-  - Search operations across auxiliary trees
+  - Search operations across auxiliary(Red Black) trees
   - Tree rotations and structural updates
   - Maintenance and rebuilding of auxiliary BSTs as preferred paths change
 
